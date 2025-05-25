@@ -1,15 +1,16 @@
-name: Generic App Updater
+﻿name: Generic App Updater
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '10 11 * * *'
   workflow_dispatch:
 
 jobs:
-  check_and_upload_apps:
+  check_and_upload_apps: 
+    name: Check and Upload Apps 
     runs-on: ubuntu-latest
     permissions:
-      contents: write # برای ایجاد ریلیز، آپلود فایل‌ها و کامیت کردن فایل ردیابی
+      contents: write 
 
     steps:
       - name: Checkout Repository
@@ -40,7 +41,7 @@ jobs:
           google-chrome --version
           echo "ChromeDriver will be managed by webdriver-manager in Python script."
 
-      - name: Get Current Date (برای کامیت)
+      - name: Get Current Date (for commit) # Translated comment
         id: date
         run: echo "TODAY=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
@@ -48,6 +49,7 @@ jobs:
         run: |
           touch versions_tracker.json
           touch urls_to_check.txt
+          # Create an empty JSON object if the tracker file is empty or new
           if [ ! -s versions_tracker.json ]; then echo "{}" > versions_tracker.json; fi
 
       - name: Run App Updater Script (using Selenium)
@@ -55,7 +57,7 @@ jobs:
         run: python scripts/app_updater.py
 
       - name: Process Updates and Create New Release
-        # این شرط تضمین می‌کند که فقط در صورت وجود آپدیت، ریلیز ساخته شود
+        # This condition ensures that a release is created only if updates exist
         if: steps.app_check.outcome == 'success' && steps.app_check.outputs.updates_count > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,9 +66,9 @@ jobs:
           UPDATES_FILE="updates_found.json"
           TRACKER_FILE="versions_tracker.json"
           DOWNLOAD_DIR="release_assets"
-          TIMESTAMP=$(date +'%Y-%m-%d-%H%M%S') # تگ زمانی منحصر به فرد
-          RELEASE_TAG="updates-${TIMESTAMP}" # تگ جدید و منحصر به فرد
-          RELEASE_TITLE="App Updates - ${TIMESTAMP}" # عنوان جدید
+          TIMESTAMP=$(date +'%Y-%m-%d-%H%M%S') # Unique timestamp tag
+          RELEASE_TAG="updates-${TIMESTAMP}" # New and unique tag
+          RELEASE_TITLE="App Updates - ${TIMESTAMP}" # New title
           RELEASE_NOTES_FILE="release_notes.md"
 
           mkdir -p $DOWNLOAD_DIR
@@ -75,10 +77,10 @@ jobs:
           echo "The following applications have been updated:" >> $RELEASE_NOTES_FILE
           echo "" >> $RELEASE_NOTES_FILE
 
-          TEMP_TRACKER_FILE=$(mktemp)
-          cp $TRACKER_FILE $TEMP_TRACKER_FILE
+          TEMP_TRACKER_FILE=$(mktemp) # Create a temporary file for tracker updates
+          cp $TRACKER_FILE $TEMP_TRACKER_FILE # Copy current tracker to temp file
 
-          # حلقه برای دانلود همه فایل ها و ساخت یادداشت ها
+          # Loop to download all files and create notes
           jq -c '.[]' $UPDATES_FILE | while IFS= read -r update_item; do
             APP_NAME=$(echo "$update_item" | jq -r '.app_name')
             VERSION=$(echo "$update_item" | jq -r '.version')
@@ -88,21 +90,22 @@ jobs:
             SUGGESTED_FILENAME=$(echo "$update_item" | jq -r '.suggested_filename')
             DOWNLOAD_PATH="$DOWNLOAD_DIR/$SUGGESTED_FILENAME"
 
-            echo "  Downloading $APP_NAME v$VERSION ($VARIANT)..."
+            echo "  Downloading $APP_NAME v$VERSION ($VARIANT) from $DOWNLOAD_URL..."
+            # Using a common User-Agent for curl
             curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36" -o "$DOWNLOAD_PATH" "$DOWNLOAD_URL"
-            
+
             if [ $? -eq 0 ]; then
               echo "  Download complete: $DOWNLOAD_PATH"
               echo "* **$APP_NAME v$VERSION ($VARIANT)** - [Source Page]($PAGE_URL)" >> $RELEASE_NOTES_FILE
             else
-              echo "  [ERROR] Failed to download $SUGGESTED_FILENAME. Skipping."
-              rm -f "$DOWNLOAD_PATH"
+              echo "  [ERROR] Failed to download $SUGGESTED_FILENAME from $DOWNLOAD_URL. Skipping."
+              rm -f "$DOWNLOAD_PATH" # Remove partially downloaded file if any
             fi
           done
 
-          sleep 2
+          sleep 2 # Small delay, can be removed if not necessary
 
-          # اگر هیچ فایلی با موفقیت دانلود نشد، خارج شوید (احتیاط بیشتر)
+          # If no files were successfully downloaded, exit (extra precaution)
           if [ ! -n "$(ls -A $DOWNLOAD_DIR)" ]; then
             echo "No files were successfully downloaded. No release will be created."
             rm -rf $DOWNLOAD_DIR $RELEASE_NOTES_FILE $TEMP_TRACKER_FILE
@@ -111,48 +114,56 @@ jobs:
 
           echo "Total files successfully downloaded: $(ls -1 $DOWNLOAD_DIR | wc -l)"
 
-          # همیشه یک ریلیز جدید ایجاد کن
+          # Always create a new release if there are downloaded files
           echo "  Creating new release: $RELEASE_TAG"
+          # Upload all files from the download directory as release assets
           gh release create "$RELEASE_TAG" $DOWNLOAD_DIR/* \
             --title "$RELEASE_TITLE" \
             --notes-file "$RELEASE_NOTES_FILE"
           RELEASE_STATUS=$?
 
-          # آپدیت فایل ردیابی در صورت موفقیت ریلیز
+          # Update tracking file if release is successful
           if [ $RELEASE_STATUS -eq 0 ]; then
             echo "  Release $RELEASE_TAG created successfully."
+            # Update the tracker file with new versions for successfully downloaded and released apps
             jq -c '.[]' $UPDATES_FILE | while IFS= read -r update_item; do
               TRACKING_ID=$(echo "$update_item" | jq -r '.tracking_id')
               CURRENT_VERSION_FOR_TRACKING=$(echo "$update_item" | jq -r '.current_version_for_tracking')
               SUGGESTED_FILENAME=$(echo "$update_item" | jq -r '.suggested_filename')
+              # Only update tracker if the file was actually downloaded and part of the release
               if [ -f "$DOWNLOAD_DIR/$SUGGESTED_FILENAME" ]; then
                   jq --arg id "$TRACKING_ID" --arg ver "$CURRENT_VERSION_FOR_TRACKING" '.[$id] = $ver' $TEMP_TRACKER_FILE > $TEMP_TRACKER_FILE.tmp && mv $TEMP_TRACKER_FILE.tmp $TEMP_TRACKER_FILE
               fi
             done
-            mv $TEMP_TRACKER_FILE $TRACKER_FILE
+            mv $TEMP_TRACKER_FILE $TRACKER_FILE # Move updated temp tracker to original tracker file
             echo "  Tracker file updated."
           else
             echo "  [ERROR] Failed to create release $RELEASE_TAG. Tracker file will not be updated."
-            rm -f $TEMP_TRACKER_FILE
+            rm -f $TEMP_TRACKER_FILE # Clean up temp file if release failed
           fi
 
+          # Clean up downloaded assets and release notes file after processing
           rm -rf $DOWNLOAD_DIR $RELEASE_NOTES_FILE
 
       - name: Commit Tracking File
-        if: always() 
+        if: always() # This step runs even if previous steps fail, to ensure tracker is committed if changed
         run: |
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'actions@github.com'
-          
+
           git add versions_tracker.json
+          # Check if there are staged changes for versions_tracker.json
           if ! git diff --staged --quiet versions_tracker.json; then
             echo "Committing changes to versions_tracker.json..."
             git commit -m "Update app versions tracker (${{ steps.date.outputs.TODAY }})"
-            for i in 1 2 3; do 
-              git pull --rebase origin ${{ github.ref_name }} || echo "Pull rebase failed, continuing push attempt."
-              git push && break 
+            # Retry push with rebase in case of remote changes
+            for i in 1 2 3; do
+              # Pull with rebase to avoid merge commits, using the current branch name
+              git pull --rebase origin ${{ github.ref_name }} || echo "Pull rebase failed on attempt $i, continuing push attempt."
+              git push && echo "Push successful." && break
               echo "Push failed (attempt $i). Retrying in 10 seconds..."
               sleep 10
+              if [ $i -eq 3 ]; then echo "Failed to push after 3 attempts."; exit 1; fi # Exit if push fails after retries
             done
           else
             echo "No changes in versions_tracker.json to commit."
