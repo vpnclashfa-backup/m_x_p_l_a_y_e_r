@@ -127,7 +127,7 @@ def aggressively_clean_name_for_tracking(name_to_clean):
         cleaned_name = re.sub(r'\s+', ' ', cleaned_name).strip("-_ ")
 
     all_keywords_for_aggressive_clean = COMMON_VARIANT_KEYWORDS_TO_DETECT_AND_CLEAN + \
-                                       ["PC", "کامپیوتر", "ویندوز", "Windows", "Lite", "لایت", "Pro", "پرو"] 
+                                        ["PC", "کامپیوتر", "ویندوز", "Windows", "Lite", "لایت", "Pro", "پرو"] 
     
     sorted_keywords = sorted(list(set(all_keywords_for_aggressive_clean)), key=len, reverse=True)
 
@@ -173,7 +173,7 @@ def extract_app_name_from_page(soup, page_url):
         # Lightly clean for display (remove Farsroid tags, maybe trailing versions)
         page_name_for_display = re.sub(r'\s*\((?:www\.)?farsroid\.com.*?\)\s*$', '', page_name_for_display, flags=re.IGNORECASE).strip()
         for pattern in VERSION_PATTERNS_FOR_CLEANING: # Remove versions if they are at the very end
-             page_name_for_display = re.sub(pattern + r'$', '', page_name_for_display, flags=re.IGNORECASE).strip("-_ ")
+            page_name_for_display = re.sub(pattern + r'$', '', page_name_for_display, flags=re.IGNORECASE).strip("-_ ")
 
         page_name_for_display = page_name_for_display.strip(' -–—')
         page_name_for_display = re.sub(r'\s+', ' ', page_name_for_display).strip()
@@ -194,7 +194,7 @@ def extract_app_name_from_page(soup, page_url):
         guessed_name = re.sub(known_extensions_regex, '', guessed_name, flags=re.IGNORECASE)
         # Remove versions
         for pattern in VERSION_PATTERNS_FOR_CLEANING:
-             guessed_name = re.sub(pattern, '', guessed_name, flags=re.IGNORECASE).strip("-_ ")
+            guessed_name = re.sub(pattern, '', guessed_name, flags=re.IGNORECASE).strip("-_ ")
         # Remove only very generic URL terms
         generic_url_terms = r'\b(دانلود|Download|برنامه|App|Apk|Farsroid|Android)\b'
         guessed_name = re.sub(generic_url_terms, '', guessed_name, flags=re.IGNORECASE).strip("-_ ")
@@ -210,6 +210,8 @@ def extract_app_name_from_page(soup, page_url):
 
 
 def get_page_source_with_selenium(url, wait_time=20, wait_for_class="downloadbox"):
+    # Note: The URL cleaning is now done in main() before this function is called.
+    # So, the 'url' parameter here is expected to be already cleaned.
     logging.info(f"در حال دریافت {url} با Selenium...")
     chrome_options = ChromeOptions()
     chrome_options.add_argument("--headless")
@@ -225,9 +227,9 @@ def get_page_source_with_selenium(url, wait_time=20, wait_for_class="downloadbox
             service = ChromeService(executable_path=driver_path)
         except Exception as e_driver_manager:
             logging.warning(f"خطا در ChromeDriverManager: {e_driver_manager}. استفاده از درایور پیشفرض.")
-            service = ChromeService()
+            service = ChromeService() # Fallback to default service if manager fails
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.get(url)
+        driver.get(url) # The URL passed here should be clean
         WebDriverWait(driver, wait_time).until(EC.presence_of_element_located((By.CLASS_NAME, wait_for_class)))
         time.sleep(5) 
         page_source = driver.page_source
@@ -236,7 +238,7 @@ def get_page_source_with_selenium(url, wait_time=20, wait_for_class="downloadbox
     except Exception as e:
         logging.error(f"خطای Selenium برای {url}: {e}", exc_info=True)
         if driver: 
-            try: return driver.page_source
+            try: return driver.page_source # Try to get source even on error if driver exists
             except: pass
         return None
     finally:
@@ -253,6 +255,7 @@ def extract_version_from_text_or_url(text_content, url_content):
         for pattern in VERSION_REGEX_PATTERNS:
             match = re.search(pattern, url_content) 
             if match: return match.group(1).strip("-_ ")
+    # Fallback pattern if more specific ones fail
     fallback_pattern = r'(\d+\.\d+(?:\.\d+){0,2}(?:[.-]?[a-zA-Z0-9]+)*)' 
     if text_content:
         match = re.search(fallback_pattern, text_content)
@@ -287,13 +290,15 @@ def get_file_extension_from_url(download_url, combined_text_for_variant):
     if ext_from_url and ext_from_url.lower() in known_extensions:
         return ext_from_url.lower()
     else:
-        if "windows" in combined_text_for_variant or "pc" in combined_text_for_variant : return ".exe" 
-        if "macos" in combined_text_for_variant or "mac" in combined_text_for_variant: return ".dmg"
-        if "linux" in combined_text_for_variant : return ".appimage" 
-        if "data" in combined_text_for_variant or "obb" in combined_text_for_variant : return ".zip" 
-        if "font" in combined_text_for_variant: return ".zip" 
-        if ext_from_url: return ext_from_url.lower()
-        return ".bin"
+        # Guess based on variant text if primary extension detection fails
+        combined_text_for_variant_lower = combined_text_for_variant.lower()
+        if "windows" in combined_text_for_variant_lower or "pc" in combined_text_for_variant_lower : return ".exe" 
+        if "macos" in combined_text_for_variant_lower or "mac" in combined_text_for_variant_lower: return ".dmg"
+        if "linux" in combined_text_for_variant_lower : return ".appimage" 
+        if "data" in combined_text_for_variant_lower or "obb" in combined_text_for_variant_lower : return ".zip" 
+        if "font" in combined_text_for_variant_lower: return ".zip" 
+        if ext_from_url: return ext_from_url.lower() # Return original if still unknown but present
+        return ".bin" # Default fallback
 
 
 def scrape_farsroid_page(page_url, soup, tracker_data):
@@ -336,6 +341,7 @@ def scrape_farsroid_page(page_url, soup, tracker_data):
 
         # --- تشخیص نوع (Variant) فقط از لینک دانلود ---
         link_only_variant_parts = []
+        # Prepare a combined text from link and filename for robust variant detection
         combined_text_for_link_variant_detection = (filename_from_url_decoded.lower() + " " + link_text.lower()).replace('(farsroid.com)', '').replace('دانلود فایل نصبی', '').replace('برنامه با لینک مستقیم', '').strip()
         combined_text_for_link_variant_detection = re.sub(r'\b(?:با لینک مستقیم|مگابایت|\d+)\b', '', combined_text_for_link_variant_detection, flags=re.IGNORECASE).strip()
         
@@ -388,17 +394,18 @@ def scrape_farsroid_page(page_url, soup, tracker_data):
         tracking_id_variant_part = sanitize_text_for_tracking_id(variant_final_for_display_tracking)
         tracking_id = f"{tracking_id_app_part}_{tracking_id_variant_part}".lower()
         tracking_id = re.sub(r'_+', '_', tracking_id).strip('_')
+        # Refine tracking_id: remove generic suffixes if not an APK or if they are redundant
         if tracking_id.endswith(("_default", "_archive", "_image", "_audio", "_video", "_document", "_font")) and file_extension != ".apk":
             tracking_id = tracking_id.rsplit('_', 1)[0]
         elif tracking_id.endswith('_universal') and file_extension != ".apk":
-             tracking_id = tracking_id[:-len('_universal')]
+            tracking_id = tracking_id[:-len('_universal')]
+        
         if not tracking_id_app_part and tracking_id_variant_part: # If app name was empty, use variant as base
             tracking_id = tracking_id_variant_part
         elif not tracking_id_variant_part and tracking_id_app_part: # If variant was empty, use app name as base
             tracking_id = tracking_id_app_part
         elif not tracking_id_app_part and not tracking_id_variant_part:
-            tracking_id = "unknown_app_variant"
-
+            tracking_id = "unknown_app_variant" # Absolute fallback
 
         logging.info(f"  شناسه ردیابی: {tracking_id}")
         
@@ -413,7 +420,6 @@ def scrape_farsroid_page(page_url, soup, tracker_data):
             base_name_no_ext_cleaned = re.sub(site_suffix_pattern, '', base_name_no_ext, flags=re.IGNORECASE).strip()
             suggested_filename = base_name_no_ext_cleaned + file_extension
 
-
         logging.info(f"  نام فایل پیشنهادی (ساده شده): {suggested_filename}")
         
         last_known_version = tracker_data.get(tracking_id, "0.0.0")
@@ -427,7 +433,7 @@ def scrape_farsroid_page(page_url, soup, tracker_data):
                 "page_url": page_url,
                 "tracking_id": tracking_id,
                 "suggested_filename": suggested_filename,
-                "current_version_for_tracking": current_version
+                "current_version_for_tracking": current_version # Store the version used for comparison
             })
         else:
             logging.info(f"    => {tracking_id} به‌روز است (فعلی: {current_version}, قبلی: {last_known_version}).")
@@ -441,8 +447,18 @@ def main():
             with open(GITHUB_OUTPUT_FILE, 'a', encoding='utf-8') as gh_output: gh_output.write(f"updates_count=0\n")
         sys.exit(1) 
 
+    raw_urls_from_file = []
     with open(URL_FILE, 'r', encoding='utf-8') as f:
-        urls_to_process = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        raw_urls_from_file = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+    urls_to_process = []
+    for raw_url in raw_urls_from_file:
+        # *** NEW: Clean the URL by removing leading BOM characters ***
+        cleaned_url = raw_url.lstrip('\ufeff')
+        if cleaned_url != raw_url:
+            # Log if a URL was actually cleaned
+            logging.info(f"کاراکتر BOM از ابتدای URL '{raw_url}' حذف و به '{cleaned_url}' تبدیل شد.")
+        urls_to_process.append(cleaned_url)
 
     if not urls_to_process:
         logging.info("فایل URL ها خالی است یا فقط شامل کامنت است.")
@@ -454,8 +470,9 @@ def main():
     tracker_data = load_tracker()
     all_updates_found = []
     
-    for page_url in urls_to_process:
+    for page_url in urls_to_process: # page_url is now the cleaned version
         logging.info(f"\n--- شروع بررسی URL: {page_url} ---")
+        # Pass the cleaned page_url to Selenium function
         page_content = get_page_source_with_selenium(page_url, wait_for_class="downloadbox") 
         
         if not page_content:
@@ -463,6 +480,7 @@ def main():
             continue
         try:
             soup = BeautifulSoup(page_content, 'html.parser')
+            # Assuming only farsroid.com URLs are processed this way for now
             if "farsroid.com" in page_url.lower(): 
                 updates_on_page = scrape_farsroid_page(page_url, soup, tracker_data)
                 all_updates_found.extend(updates_on_page)
