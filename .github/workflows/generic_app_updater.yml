@@ -2,8 +2,8 @@ name: Generic App Updater
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # 9 صبح
-  workflow_dispatch: # امکان اجرای دستی
+    - cron: '0 9 * * *'
+  workflow_dispatch:
 
 jobs:
   check_and_upload_apps:
@@ -31,7 +31,7 @@ jobs:
         run: |
           echo "Setting up Google Chrome..."
           sudo apt-get update -y
-          sudo apt-get install -y wget gnupg jq # jq را هم اینجا نصب می‌کنیم
+          sudo apt-get install -y wget gnupg jq
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
           sudo apt-get update -y
@@ -40,7 +40,7 @@ jobs:
           google-chrome --version
           echo "ChromeDriver will be managed by webdriver-manager in Python script."
 
-      - name: Get Current Date
+      - name: Get Current Date (برای کامیت)
         id: date
         run: echo "TODAY=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
@@ -54,31 +54,29 @@ jobs:
         id: app_check
         run: python scripts/app_updater.py
 
-      - name: Process Updates and Create/Upload to Single Release
-        # شرط برای اجرا: اسکریپت پایتون موفق بوده و تعداد آپدیت ها بیشتر از صفر است
+      - name: Process Updates and Create New Release
+        # این شرط تضمین می‌کند که فقط در صورت وجود آپدیت، ریلیز ساخته شود
         if: steps.app_check.outcome == 'success' && steps.app_check.outputs.updates_count > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TODAY_DATE: ${{ steps.date.outputs.TODAY }}
         run: |
           echo "Processing updates found. Count: ${{ steps.app_check.outputs.updates_count }}"
           UPDATES_FILE="updates_found.json"
           TRACKER_FILE="versions_tracker.json"
           DOWNLOAD_DIR="release_assets"
-          RELEASE_TAG="updates-${TODAY_DATE}" # تگ واحد بر اساس تاریخ
-          RELEASE_TITLE="App Updates - ${TODAY_DATE}" # عنوان واحد
+          TIMESTAMP=$(date +'%Y-%m-%d-%H%M%S') # تگ زمانی منحصر به فرد
+          RELEASE_TAG="updates-${TIMESTAMP}" # تگ جدید و منحصر به فرد
+          RELEASE_TITLE="App Updates - ${TIMESTAMP}" # عنوان جدید
           RELEASE_NOTES_FILE="release_notes.md"
 
-          mkdir -p $DOWNLOAD_DIR # ایجاد پوشه برای فایل‌های دانلودی
-          echo "## App Updates for ${TODAY_DATE}" > $RELEASE_NOTES_FILE
+          mkdir -p $DOWNLOAD_DIR
+          echo "## App Updates - ${TIMESTAMP}" > $RELEASE_NOTES_FILE
           echo "" >> $RELEASE_NOTES_FILE
           echo "The following applications have been updated:" >> $RELEASE_NOTES_FILE
           echo "" >> $RELEASE_NOTES_FILE
 
-          TEMP_TRACKER_FILE=$(mktemp) # فایل ردیابی موقت
+          TEMP_TRACKER_FILE=$(mktemp)
           cp $TRACKER_FILE $TEMP_TRACKER_FILE
-
-          DOWNLOADED_FILES_LIST=() # لیست فایل های دانلود شده برای آپلود
 
           # حلقه برای دانلود همه فایل ها و ساخت یادداشت ها
           jq -c '.[]' $UPDATES_FILE | while IFS= read -r update_item; do
@@ -88,7 +86,6 @@ jobs:
             DOWNLOAD_URL=$(echo "$update_item" | jq -r '.download_url')
             PAGE_URL=$(echo "$update_item" | jq -r '.page_url')
             SUGGESTED_FILENAME=$(echo "$update_item" | jq -r '.suggested_filename')
-            
             DOWNLOAD_PATH="$DOWNLOAD_DIR/$SUGGESTED_FILENAME"
 
             echo "  Downloading $APP_NAME v$VERSION ($VARIANT)..."
@@ -96,79 +93,64 @@ jobs:
             
             if [ $? -eq 0 ]; then
               echo "  Download complete: $DOWNLOAD_PATH"
-              DOWNLOADED_FILES_LIST+=("$DOWNLOAD_PATH")
               echo "* **$APP_NAME v$VERSION ($VARIANT)** - [Source Page]($PAGE_URL)" >> $RELEASE_NOTES_FILE
             else
               echo "  [ERROR] Failed to download $SUGGESTED_FILENAME. Skipping."
-              rm -f "$DOWNLOAD_PATH" # حذف فایل ناقص در صورت خطا
+              rm -f "$DOWNLOAD_PATH"
             fi
           done
 
-          sleep 2 # اطمینان از پایان نوشتن فایل یادداشت
+          sleep 2
 
-          # اگر هیچ فایلی دانلود نشد، خارج شوید
+          # اگر هیچ فایلی با موفقیت دانلود نشد، خارج شوید (احتیاط بیشتر)
           if [ ! -n "$(ls -A $DOWNLOAD_DIR)" ]; then
-            echo "No files were successfully downloaded. No release will be created/updated."
+            echo "No files were successfully downloaded. No release will be created."
             rm -rf $DOWNLOAD_DIR $RELEASE_NOTES_FILE $TEMP_TRACKER_FILE
             exit 0
           fi
 
           echo "Total files successfully downloaded: $(ls -1 $DOWNLOAD_DIR | wc -l)"
 
-          RELEASE_STATUS=1 # 1 = خطا
+          # همیشه یک ریلیز جدید ایجاد کن
+          echo "  Creating new release: $RELEASE_TAG"
+          gh release create "$RELEASE_TAG" $DOWNLOAD_DIR/* \
+            --title "$RELEASE_TITLE" \
+            --notes-file "$RELEASE_NOTES_FILE"
+          RELEASE_STATUS=$?
 
-          # بررسی وجود ریلیز و ایجاد/آپلود
-          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            echo "  Creating new release: $RELEASE_TAG"
-            gh release create "$RELEASE_TAG" $DOWNLOAD_DIR/* \
-              --title "$RELEASE_TITLE" \
-              --notes-file "$RELEASE_NOTES_FILE"
-            RELEASE_STATUS=$?
-          else
-            echo "  Release $RELEASE_TAG already exists. Uploading assets..."
-            gh release upload "$RELEASE_TAG" $DOWNLOAD_DIR/* --clobber
-            RELEASE_STATUS=$?
-          fi
-
-          # فقط در صورت موفقیت آمیز بودن ریلیز، فایل ردیابی را آپدیت کن
+          # آپدیت فایل ردیابی در صورت موفقیت ریلیز
           if [ $RELEASE_STATUS -eq 0 ]; then
-            echo "  Release processed successfully."
+            echo "  Release $RELEASE_TAG created successfully."
             jq -c '.[]' $UPDATES_FILE | while IFS= read -r update_item; do
               TRACKING_ID=$(echo "$update_item" | jq -r '.tracking_id')
               CURRENT_VERSION_FOR_TRACKING=$(echo "$update_item" | jq -r '.current_version_for_tracking')
               SUGGESTED_FILENAME=$(echo "$update_item" | jq -r '.suggested_filename')
-              # فقط اگر فایلش دانلود شده باشد، ردیاب را آپدیت کن
               if [ -f "$DOWNLOAD_DIR/$SUGGESTED_FILENAME" ]; then
-                 jq --arg id "$TRACKING_ID" --arg ver "$CURRENT_VERSION_FOR_TRACKING" '.[$id] = $ver' $TEMP_TRACKER_FILE > $TEMP_TRACKER_FILE.tmp && mv $TEMP_TRACKER_FILE.tmp $TEMP_TRACKER_FILE
+                  jq --arg id "$TRACKING_ID" --arg ver "$CURRENT_VERSION_FOR_TRACKING" '.[$id] = $ver' $TEMP_TRACKER_FILE > $TEMP_TRACKER_FILE.tmp && mv $TEMP_TRACKER_FILE.tmp $TEMP_TRACKER_FILE
               fi
             done
             mv $TEMP_TRACKER_FILE $TRACKER_FILE
             echo "  Tracker file updated."
           else
-            echo "  [ERROR] Failed to create or upload to release $RELEASE_TAG. Tracker file will not be updated."
+            echo "  [ERROR] Failed to create release $RELEASE_TAG. Tracker file will not be updated."
             rm -f $TEMP_TRACKER_FILE
           fi
 
-          # پاک کردن فایل های موقت
           rm -rf $DOWNLOAD_DIR $RELEASE_NOTES_FILE
 
-
       - name: Commit Tracking File
-        if: always() # این مرحله همیشه اجرا می شود تا بتواند تغییرات را کامیت کند یا بگوید تغییری نیست
+        if: always() 
         run: |
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'actions@github.com'
           
           git add versions_tracker.json
-          # فقط اگر فایل versions_tracker.json تغییر کرده باشد کامیت کن
           if ! git diff --staged --quiet versions_tracker.json; then
             echo "Committing changes to versions_tracker.json..."
             git commit -m "Update app versions tracker (${{ steps.date.outputs.TODAY }})"
-            # تلاش برای پوش کردن با مدیریت خطای احتمالی
-            for i in 1 2 3; do # تا 3 بار تلاش کن
-              # قبل از تلاش مجدد، تغییرات ریموت را بکشید تا از conflict جلوگیری شود
+            for i in 1 2 3; do 
               git pull --rebase origin ${{ github.ref_name }} || echo "Pull rebase failed, continuing push attempt."
-              git push && break # اگر موفق بود، خارج شو
+              git push && break 
               echo "Push failed (attempt $i). Retrying in 10 seconds..."
               sleep 10
             done
